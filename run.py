@@ -121,22 +121,31 @@ def detect_face_boxes(model, processor, pil_image: Image.Image) -> list:
     """
     얼굴 그라운딩을 실행하고 바운딩 박스를 반환한다.
 
-    Qwen2.5-VL 그라운딩 출력 형식:
-      <|object_ref_start|>face<|object_ref_end|>
-      <|box_start|>(x1,y1),(x2,y2)<|box_end|>
+    Qwen2.5-VL이 출력할 수 있는 두 가지 형식을 모두 파싱한다.
+      형식 A: <|box_start|>(x1,y1),(x2,y2)<|box_end|>
+      형식 B: {"bbox_2d": [x1, y1, x2, y2], ...}  (JSON)
     좌표: [0, 1000] 정규화 범위
 
     반환값: [(x1, y1, x2, y2), ...] — 빈 리스트이면 얼굴 없음
     """
     raw = _infer(model, processor, pil_image,
-                 prompt=FACE_DETECT_PROMPT, max_new_tokens=256,
+                 prompt=FACE_DETECT_PROMPT, max_new_tokens=512,
                  skip_special_tokens=False)
     print(f"[얼굴 감지 원문] {raw!r}")
 
     boxes = []
-    # <|box_start|>(x1,y1),(x2,y2)<|box_end|> 형식에서 좌표 추출
+
+    # 형식 A: <|box_start|>(x1,y1),(x2,y2)<|box_end|>
     for section in re.findall(r'<\|box_start\|>(.*?)<\|box_end\|>', raw):
         for m in re.finditer(r'\((\d+),\s*(\d+)\),\s*\((\d+),\s*(\d+)\)', section):
+            boxes.append(tuple(int(m.group(i)) for i in range(1, 5)))
+
+    # 형식 B: JSON {"bbox_2d": [x1, y1, x2, y2]}
+    if not boxes:
+        for m in re.finditer(
+            r'"bbox_2d"\s*:\s*\[\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\]',
+            raw
+        ):
             boxes.append(tuple(int(m.group(i)) for i in range(1, 5)))
 
     return boxes
