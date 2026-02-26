@@ -370,9 +370,9 @@ def main():
             # 분석 결과 수신 → 결과창 갱신 (OpenCV 창은 메인 스레드에서만 조작)
             with lock:
                 if pending_result is not None:
-                    annotated_frame, desc, n_faces = pending_result
+                    annotated_frame, desc, n_keyboards = pending_result
                     result_image   = build_result_image(
-                        annotated_frame, desc, face_count=n_faces
+                        annotated_frame, desc, keyboard_count=n_keyboards
                     )
                     pending_result = None
 
