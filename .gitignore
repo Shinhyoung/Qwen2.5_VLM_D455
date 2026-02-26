@@ -1,0 +1,21 @@
+# Claude Code 설정
+.claude/
+
+# 테스트 이미지
+*.jpg
+*.jpeg
+*.png
+*.bmp
+*.gif
+*.tiff
+*.webp
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.env
+*.egg-info/
+
+# IDE
+.vscode/

@@ -1,0 +1,8 @@
+transformers>=4.45.0
+accelerate>=0.34.0
+bitsandbytes>=0.44.0
+qwen-vl-utils>=0.0.8
+Pillow>=10.0.0
+requests>=2.31.0
+opencv-python>=4.8.0
+pyrealsense2>=2.55.0
