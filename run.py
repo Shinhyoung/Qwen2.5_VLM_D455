@@ -4,7 +4,7 @@ Qwen2.5-VL-7B-Instruct RealSense D455 실시간 이미지 분석 프로그램
 - 'c' 키로 현재 프레임 캡처 후 VLM 모델 분석
 - 분석 중에도 실시간 영상 유지
 - 분석 완료 후 결과창 표시 및 'c' 키 재활성화
-- 사람 얼굴 감지 시 결과 이미지에 빨간색 바운딩 박스 표시
+- 키보드 감지 시 결과 이미지에 빨간색 바운딩 박스 표시
 """
 
 import re
@@ -30,7 +30,7 @@ MIN_PIXELS = 256 * 28 * 28     # 최소 256 토큰
 MAX_PIXELS = 1024 * 28 * 28    # 최대 1024 토큰 (~896×896)
 
 DEFAULT_PROMPT     = "이 이미지를 자세히 설명해주세요."
-FACE_DETECT_PROMPT = "Detect all human faces."
+KEYBOARD_DETECT_PROMPT = "Detect all keyboards."
 
 FONT_PATH      = "C:/Windows/Fonts/malgun.ttf"    # 맑은 고딕
 FONT_BOLD_PATH = "C:/Windows/Fonts/malgunbd.ttf"  # 맑은 고딕 Bold
@@ -117,21 +117,21 @@ def run_inference(model, processor, pil_image: Image.Image,
                   prompt=prompt, max_new_tokens=1024, skip_special_tokens=True)
 
 
-def detect_face_boxes(model, processor, pil_image: Image.Image) -> list:
+def detect_keyboard_boxes(model, processor, pil_image: Image.Image) -> list:
     """
-    얼굴 그라운딩을 실행하고 바운딩 박스를 반환한다.
+    키보드 그라운딩을 실행하고 바운딩 박스를 반환한다.
 
     Qwen2.5-VL이 출력할 수 있는 두 가지 형식을 모두 파싱한다.
       형식 A: <|box_start|>(x1,y1),(x2,y2)<|box_end|>
       형식 B: {"bbox_2d": [x1, y1, x2, y2], ...}  (JSON)
     좌표: [0, 1000] 정규화 범위
 
-    반환값: [(x1, y1, x2, y2), ...] — 빈 리스트이면 얼굴 없음
+    반환값: [(x1, y1, x2, y2), ...] — 빈 리스트이면 키보드 없음
     """
     raw = _infer(model, processor, pil_image,
-                 prompt=FACE_DETECT_PROMPT, max_new_tokens=512,
+                 prompt=KEYBOARD_DETECT_PROMPT, max_new_tokens=512,
                  skip_special_tokens=False)
-    print(f"[얼굴 감지 원문] {raw!r}")
+    print(f"[키보드 감지 원문] {raw!r}")
 
     boxes = []
 
@@ -151,9 +151,9 @@ def detect_face_boxes(model, processor, pil_image: Image.Image) -> list:
     return boxes
 
 
-def draw_face_boxes(frame_bgr: np.ndarray, boxes_1000: list) -> np.ndarray:
+def draw_keyboard_boxes(frame_bgr: np.ndarray, boxes_1000: list) -> np.ndarray:
     """
-    [0, 1000] 정규화 좌표의 얼굴 박스를 원본 프레임 위에 빨간색으로 그린다.
+    [0, 1000] 정규화 좌표의 키보드 박스를 원본 프레임 위에 빨간색으로 그린다.
     """
     if not boxes_1000:
         return frame_bgr
@@ -170,8 +170,8 @@ def draw_face_boxes(frame_bgr: np.ndarray, boxes_1000: list) -> np.ndarray:
         # 빨간색 박스 (두께 2)
         cv2.rectangle(annotated, (px1, py1), (px2, py2), (0, 0, 255), 2)
 
-        # 박스 위에 "Face N" 레이블
-        label = f"Face {idx + 1}"
+        # 박스 위에 "Keyboard N" 레이블
+        label = f"Keyboard {idx + 1}"
         label_y = max(py1 - 8, 16)
         cv2.putText(annotated, label, (px1, label_y),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 0, 0),   3)
@@ -203,9 +203,9 @@ def _wrap_text_pil(text: str, font, max_width: int) -> list:
 
 
 def build_result_image(frame_bgr: np.ndarray, result_text: str,
-                       face_count: int = 0,
+                       keyboard_count: int = 0,
                        window_width: int = 960) -> np.ndarray:
-    """캡처 이미지(얼굴 박스 포함)와 분석 결과 텍스트를 합성한다."""
+    """캡처 이미지(키보드 박스 포함)와 분석 결과 텍스트를 합성한다."""
     padding         = 20
     line_height     = 24
     text_font_size  = 16
@@ -241,17 +241,17 @@ def build_result_image(frame_bgr: np.ndarray, result_text: str,
     draw.line([(padding, sep_y), (window_width - padding, sep_y)],
               fill=(80, 80, 80), width=1)
 
-    # 제목 + 얼굴 감지 수
+    # 제목 + 키보드 감지 수
     title_y = padding + img_h + padding
     draw.text((padding, title_y), "분석 결과", font=title_font, fill=(100, 200, 100))
 
-    if face_count > 0:
-        face_label = f"  |  얼굴 감지: {face_count}명"
-        face_color = (100, 160, 255)
+    if keyboard_count > 0:
+        kbd_label = f"  |  키보드 감지: {keyboard_count}개"
+        kbd_color = (100, 160, 255)
     else:
-        face_label = "  |  얼굴 감지: 없음"
-        face_color = (130, 130, 130)
-    draw.text((padding + 110, title_y + 1), face_label, font=font, fill=face_color)
+        kbd_label = "  |  키보드 감지: 없음"
+        kbd_color = (130, 130, 130)
+    draw.text((padding + 110, title_y + 1), kbd_label, font=font, fill=kbd_color)
 
     # 분석 결과 텍스트
     for i, line in enumerate(lines):
@@ -294,31 +294,31 @@ def main():
     lock            = threading.Lock()
     capture_enabled = True
     is_analyzing    = False
-    pending_result  = None  # worker → main: (annotated_frame, text, face_count)
+    pending_result  = None  # worker → main: (annotated_frame, text, keyboard_count)
     result_image    = None  # 현재 결과창에 표시 중인 이미지
 
     # ── 분석 워커 (별도 스레드) ───────────────────────────────────────────────
     def analysis_worker(frame_bgr: np.ndarray):
         nonlocal capture_enabled, is_analyzing, pending_result
 
-        pil_image  = Image.fromarray(cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB))
-        annotated  = frame_bgr
-        face_count = 0
+        pil_image      = Image.fromarray(cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB))
+        annotated      = frame_bgr
+        keyboard_count = 0
 
         try:
             # 1단계: 이미지 설명 생성
             description = run_inference(model, processor, pil_image)
 
-            # 2단계: 얼굴 그라운딩 감지
-            face_boxes = detect_face_boxes(model, processor, pil_image)
-            face_count = len(face_boxes)
+            # 2단계: 키보드 그라운딩 감지
+            keyboard_boxes = detect_keyboard_boxes(model, processor, pil_image)
+            keyboard_count = len(keyboard_boxes)
 
-            if face_boxes:
+            if keyboard_boxes:
                 # 원본 프레임에 빨간 박스 그리기
-                annotated = draw_face_boxes(frame_bgr, face_boxes)
-                print(f"[얼굴 감지] {face_count}명 감지 — 바운딩 박스 적용")
+                annotated = draw_keyboard_boxes(frame_bgr, keyboard_boxes)
+                print(f"[키보드 감지] {keyboard_count}개 감지 — 바운딩 박스 적용")
             else:
-                print("[얼굴 감지] 얼굴 없음")
+                print("[키보드 감지] 키보드 없음")
 
         except torch.cuda.OutOfMemoryError:
             description = "오류: GPU 메모리가 부족합니다."
@@ -328,14 +328,14 @@ def main():
         print(f"\n[분석 결과]\n{description}\n")
 
         with lock:
-            pending_result = (annotated, description, face_count)
+            pending_result = (annotated, description, keyboard_count)
 
         is_analyzing    = False
         capture_enabled = True
 
     # ── 메인 루프 ─────────────────────────────────────────────────────────────
     print("\n조작 방법")
-    print("  c  - 현재 프레임 캡처 및 분석 (얼굴 감지 포함)")
+    print("  c  - 현재 프레임 캡처 및 분석 (키보드 감지 포함)")
     print("  q  - 종료\n")
 
     cv2.namedWindow(LIVE_WIN, cv2.WINDOW_NORMAL)
