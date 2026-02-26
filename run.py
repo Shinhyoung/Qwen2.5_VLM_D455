@@ -4,7 +4,7 @@ Qwen2.5-VL-7B-Instruct RealSense D455 실시간 이미지 분석 프로그램
 - 'c' 키로 현재 프레임 캡처 후 VLM 모델 분석
 - 분석 중에도 실시간 영상 유지
 - 분석 완료 후 결과창 표시 및 'c' 키 재활성화
-- 키보드 감지 시 결과 이미지에 빨간색 바운딩 박스 표시
+- 감지 대상(DETECTION_TARGET) 객체에 빨간색 바운딩 박스 표시
 """
 
 import re
@@ -23,22 +23,47 @@ from transformers import (
 )
 from qwen_vl_utils import process_vision_info
 
-# ── 설정 ──────────────────────────────────────────────────────────────────────
-MODEL_ID = "Qwen/Qwen2.5-VL-7B-Instruct"
-
-MIN_PIXELS = 256 * 28 * 28     # 최소 256 토큰
+# ── 모델 ──────────────────────────────────────────────────────────────────────
+MODEL_ID   = "Qwen/Qwen2.5-VL-7B-Instruct"
+MIN_PIXELS = 256  * 28 * 28    # 최소 256 토큰
 MAX_PIXELS = 1024 * 28 * 28    # 최대 1024 토큰 (~896×896)
 
-DEFAULT_PROMPT     = "이 이미지를 자세히 설명해주세요."
-KEYBOARD_DETECT_PROMPT = "Detect all keyboards."
+# ── 카메라 ────────────────────────────────────────────────────────────────────
+CAMERA_WIDTH  = 1280
+CAMERA_HEIGHT = 720
+CAMERA_FPS    = 30
 
-FONT_PATH      = "C:/Windows/Fonts/malgun.ttf"    # 맑은 고딕
-FONT_BOLD_PATH = "C:/Windows/Fonts/malgunbd.ttf"  # 맑은 고딕 Bold
+# ── 감지 대상 (변경 시 이 두 줄만 수정) ──────────────────────────────────────
+DETECTION_TARGET = "keyboard"   # 영문 단수형 — 프롬프트에 사용
+DETECTION_LABEL  = "키보드"      # 결과창 한글 표시
 
+DETECTION_PROMPT = f"Detect all {DETECTION_TARGET}s."
+DEFAULT_PROMPT   = "이 이미지를 자세히 설명해주세요."
+
+# ── 폰트 (Windows 맑은 고딕) ─────────────────────────────────────────────────
+FONT_PATH      = "C:/Windows/Fonts/malgun.ttf"
+FONT_BOLD_PATH = "C:/Windows/Fonts/malgunbd.ttf"
+
+# ── 결과 이미지 UI ────────────────────────────────────────────────────────────
+RESULT_WIN_WIDTH   = 960
+RESULT_PADDING     = 20
+RESULT_LINE_HEIGHT = 24
+RESULT_FONT_SIZE   = 16
+RESULT_TITLE_SIZE  = 18
+
+# ── 오버레이 / 박스 ───────────────────────────────────────────────────────────
+BOX_COLOR         = (0, 0, 255)   # BGR 빨간색
+BOX_THICKNESS     = 2
+BOX_FONT_SCALE    = 0.65
+STATUS_FONT_SCALE = 0.8
+
+# ── 창 이름 ───────────────────────────────────────────────────────────────────
 LIVE_WIN   = "RealSense D455 - Live"
 RESULT_WIN = "Analysis Result"
 # ──────────────────────────────────────────────────────────────────────────────
 
+
+# ── 모델 로드 ─────────────────────────────────────────────────────────────────
 
 def load_model():
     """4-bit NF4 양자화로 모델과 프로세서를 로드한다."""
@@ -58,7 +83,6 @@ def load_model():
         device_map="auto",
         torch_dtype=torch.float16,
     )
-
     processor = AutoProcessor.from_pretrained(
         MODEL_ID,
         min_pixels=MIN_PIXELS,
@@ -73,6 +97,8 @@ def load_model():
 
     return model, processor
 
+
+# ── 추론 ──────────────────────────────────────────────────────────────────────
 
 def _infer(model, processor, pil_image: Image.Image,
            prompt: str, max_new_tokens: int,
@@ -117,21 +143,21 @@ def run_inference(model, processor, pil_image: Image.Image,
                   prompt=prompt, max_new_tokens=1024, skip_special_tokens=True)
 
 
-def detect_keyboard_boxes(model, processor, pil_image: Image.Image) -> list:
+def detect_objects(model, processor, pil_image: Image.Image) -> list:
     """
-    키보드 그라운딩을 실행하고 바운딩 박스를 반환한다.
+    DETECTION_TARGET 객체를 그라운딩하고 바운딩 박스를 반환한다.
 
-    Qwen2.5-VL이 출력할 수 있는 두 가지 형식을 모두 파싱한다.
-      형식 A: <|box_start|>(x1,y1),(x2,y2)<|box_end|>
-      형식 B: {"bbox_2d": [x1, y1, x2, y2], ...}  (JSON)
-    좌표: [0, 1000] 정규화 범위
+    Qwen2.5-VL 출력 형식 두 가지를 모두 파싱한다.
+      형식 A: <|box_start|>(x1,y1),(x2,y2)<|box_end|>  (특수 토큰)
+      형식 B: {"bbox_2d": [x1, y1, x2, y2]}             (JSON)
+    좌표 범위: [0, 1000] 정규화
 
-    반환값: [(x1, y1, x2, y2), ...] — 빈 리스트이면 키보드 없음
+    반환값: [(x1, y1, x2, y2), ...] — 빈 리스트이면 감지 없음
     """
     raw = _infer(model, processor, pil_image,
-                 prompt=KEYBOARD_DETECT_PROMPT, max_new_tokens=512,
+                 prompt=DETECTION_PROMPT, max_new_tokens=512,
                  skip_special_tokens=False)
-    print(f"[키보드 감지 원문] {raw!r}")
+    print(f"[{DETECTION_LABEL} 감지 원문] {raw!r}")
 
     boxes = []
 
@@ -151,9 +177,19 @@ def detect_keyboard_boxes(model, processor, pil_image: Image.Image) -> list:
     return boxes
 
 
-def draw_keyboard_boxes(frame_bgr: np.ndarray, boxes_1000: list) -> np.ndarray:
+# ── 그리기 헬퍼 ───────────────────────────────────────────────────────────────
+
+def _draw_outlined_text(img: np.ndarray, text: str, pos: tuple,
+                        font_scale: float, color: tuple) -> None:
+    """검은 외곽선 + 컬러 본문 이중 렌더링으로 가독성 있는 텍스트를 그린다."""
+    cv2.putText(img, text, pos, cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 0, 0), 3)
+    cv2.putText(img, text, pos, cv2.FONT_HERSHEY_SIMPLEX, font_scale, color,    2)
+
+
+def draw_object_boxes(frame_bgr: np.ndarray, boxes_1000: list) -> np.ndarray:
     """
-    [0, 1000] 정규화 좌표의 키보드 박스를 원본 프레임 위에 빨간색으로 그린다.
+    [0, 1000] 정규화 좌표의 객체 박스를 원본 프레임 위에 빨간색으로 그린다.
+    레이블 형식: "{DETECTION_LABEL} N"
     """
     if not boxes_1000:
         return frame_bgr
@@ -167,19 +203,16 @@ def draw_keyboard_boxes(frame_bgr: np.ndarray, boxes_1000: list) -> np.ndarray:
         px2 = int(x2 / 1000 * w)
         py2 = int(y2 / 1000 * h)
 
-        # 빨간색 박스 (두께 2)
-        cv2.rectangle(annotated, (px1, py1), (px2, py2), (0, 0, 255), 2)
+        cv2.rectangle(annotated, (px1, py1), (px2, py2), BOX_COLOR, BOX_THICKNESS)
 
-        # 박스 위에 "Keyboard N" 레이블
-        label = f"Keyboard {idx + 1}"
+        label   = f"{DETECTION_LABEL} {idx + 1}"
         label_y = max(py1 - 8, 16)
-        cv2.putText(annotated, label, (px1, label_y),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 0, 0),   3)
-        cv2.putText(annotated, label, (px1, label_y),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 0, 255), 2)
+        _draw_outlined_text(annotated, label, (px1, label_y), BOX_FONT_SCALE, BOX_COLOR)
 
     return annotated
 
+
+# ── 결과 이미지 합성 ─────────────────────────────────────────────────────────
 
 def _wrap_text_pil(text: str, font, max_width: int) -> list:
     """PIL 폰트 실제 렌더링 너비 기준으로 텍스트를 줄바꿈한다."""
@@ -203,22 +236,16 @@ def _wrap_text_pil(text: str, font, max_width: int) -> list:
 
 
 def build_result_image(frame_bgr: np.ndarray, result_text: str,
-                       keyboard_count: int = 0,
-                       window_width: int = 960) -> np.ndarray:
-    """캡처 이미지(키보드 박스 포함)와 분석 결과 텍스트를 합성한다."""
-    padding         = 20
-    line_height     = 24
-    text_font_size  = 16
-    title_font_size = 18
-
+                       obj_count: int = 0) -> np.ndarray:
+    """객체 박스 오버레이가 적용된 캡처 이미지와 분석 결과 텍스트를 합성한다."""
     try:
-        font       = ImageFont.truetype(FONT_PATH,      text_font_size)
-        title_font = ImageFont.truetype(FONT_BOLD_PATH, title_font_size)
+        font       = ImageFont.truetype(FONT_PATH,      RESULT_FONT_SIZE)
+        title_font = ImageFont.truetype(FONT_BOLD_PATH, RESULT_TITLE_SIZE)
     except OSError:
         font       = ImageFont.load_default()
         title_font = font
 
-    img_w = window_width - 2 * padding
+    img_w = RESULT_WIN_WIDTH - 2 * RESULT_PADDING
     h, w  = frame_bgr.shape[:2]
     img_h = int(h * img_w / w)
 
@@ -227,119 +254,124 @@ def build_result_image(frame_bgr: np.ndarray, result_text: str,
     )
 
     lines        = _wrap_text_pil(result_text, font, img_w)
-    text_area_h  = len(lines) * line_height + 2 * padding + 56
-    total_height = padding + img_h + padding + text_area_h
+    text_area_h  = len(lines) * RESULT_LINE_HEIGHT + 2 * RESULT_PADDING + 56
+    total_height = RESULT_PADDING + img_h + RESULT_PADDING + text_area_h
 
-    canvas = Image.new('RGB', (window_width, total_height), (30, 30, 30))
+    canvas = Image.new('RGB', (RESULT_WIN_WIDTH, total_height), (30, 30, 30))
     draw   = ImageDraw.Draw(canvas)
 
-    # 캡처 이미지 (얼굴 박스가 그려진 상태)
-    canvas.paste(Image.fromarray(resized_rgb), (padding, padding))
+    # 객체 박스 오버레이가 적용된 캡처 이미지
+    canvas.paste(Image.fromarray(resized_rgb), (RESULT_PADDING, RESULT_PADDING))
 
     # 구분선
-    sep_y = padding + img_h + padding // 2
-    draw.line([(padding, sep_y), (window_width - padding, sep_y)],
+    sep_y = RESULT_PADDING + img_h + RESULT_PADDING // 2
+    draw.line([(RESULT_PADDING, sep_y), (RESULT_WIN_WIDTH - RESULT_PADDING, sep_y)],
               fill=(80, 80, 80), width=1)
 
-    # 제목 + 키보드 감지 수
-    title_y = padding + img_h + padding
-    draw.text((padding, title_y), "분석 결과", font=title_font, fill=(100, 200, 100))
+    # 제목 + 감지 수
+    title_y = RESULT_PADDING + img_h + RESULT_PADDING
+    draw.text((RESULT_PADDING, title_y), "분석 결과", font=title_font, fill=(100, 200, 100))
 
-    if keyboard_count > 0:
-        kbd_label = f"  |  키보드 감지: {keyboard_count}개"
-        kbd_color = (100, 160, 255)
+    if obj_count > 0:
+        det_label = f"  |  {DETECTION_LABEL} 감지: {obj_count}개"
+        det_color = (100, 160, 255)
     else:
-        kbd_label = "  |  키보드 감지: 없음"
-        kbd_color = (130, 130, 130)
-    draw.text((padding + 110, title_y + 1), kbd_label, font=font, fill=kbd_color)
+        det_label = f"  |  {DETECTION_LABEL} 감지: 없음"
+        det_color = (130, 130, 130)
+    draw.text((RESULT_PADDING + 110, title_y + 1), det_label, font=font, fill=det_color)
 
     # 분석 결과 텍스트
     for i, line in enumerate(lines):
-        y = title_y + 32 + i * line_height
-        draw.text((padding, y), line, font=font, fill=(220, 220, 220))
+        y = title_y + 32 + i * RESULT_LINE_HEIGHT
+        draw.text((RESULT_PADDING, y), line, font=font, fill=(220, 220, 220))
 
     return cv2.cvtColor(np.array(canvas), cv2.COLOR_RGB2BGR)
 
 
-def main():
-    # ── GPU 확인 ──────────────────────────────────────────────────────────────
-    if not torch.cuda.is_available():
-        print("오류: CUDA GPU를 찾을 수 없습니다.", file=sys.stderr)
-        sys.exit(1)
+# ── 카메라 초기화 ─────────────────────────────────────────────────────────────
 
-    gpu_name = torch.cuda.get_device_name(0)
-    gpu_mem  = torch.cuda.get_device_properties(0).total_memory / 1024**3
-    print(f"GPU: {gpu_name} ({gpu_mem:.1f}GB)")
-
-    # ── 모델 로드 ─────────────────────────────────────────────────────────────
-    try:
-        model, processor = load_model()
-    except Exception as e:
-        print(f"모델 로딩 실패: {e}", file=sys.stderr)
-        sys.exit(1)
-
-    # ── RealSense 파이프라인 초기화 ───────────────────────────────────────────
+def init_camera() -> rs.pipeline:
+    """RealSense D455 파이프라인을 생성하고 시작한다."""
     pipeline  = rs.pipeline()
     rs_config = rs.config()
-    rs_config.enable_stream(rs.stream.color, 1280, 720, rs.format.bgr8, 30)
-
+    rs_config.enable_stream(
+        rs.stream.color,
+        CAMERA_WIDTH, CAMERA_HEIGHT,
+        rs.format.bgr8, CAMERA_FPS,
+    )
     try:
         pipeline.start(rs_config)
-        print("RealSense D455 시작됨 (1280×720 @ 30fps)")
+        print(f"RealSense D455 시작됨 ({CAMERA_WIDTH}×{CAMERA_HEIGHT} @ {CAMERA_FPS}fps)")
+        return pipeline
     except Exception as e:
         print(f"카메라 시작 실패: {e}", file=sys.stderr)
         sys.exit(1)
 
-    # ── 공유 상태 ─────────────────────────────────────────────────────────────
-    lock            = threading.Lock()
-    capture_enabled = True
-    is_analyzing    = False
-    pending_result  = None  # worker → main: (annotated_frame, text, keyboard_count)
-    result_image    = None  # 현재 결과창에 표시 중인 이미지
 
-    # ── 분석 워커 (별도 스레드) ───────────────────────────────────────────────
+# ── 분석 워커 클로저 생성 ─────────────────────────────────────────────────────
+
+def make_analysis_worker(model, processor, lock: threading.Lock,
+                         state: dict) -> callable:
+    """
+    백그라운드 스레드에서 실행할 analysis_worker 클로저를 반환한다.
+    state 딕셔너리 키: capture_enabled, is_analyzing, pending_result
+    """
     def analysis_worker(frame_bgr: np.ndarray):
-        nonlocal capture_enabled, is_analyzing, pending_result
-
-        pil_image      = Image.fromarray(cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB))
-        annotated      = frame_bgr
-        keyboard_count = 0
+        pil_image = Image.fromarray(cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB))
+        annotated = frame_bgr
+        obj_count = 0
 
         try:
             # 1단계: 이미지 설명 생성
             description = run_inference(model, processor, pil_image)
 
-            # 2단계: 키보드 그라운딩 감지
-            keyboard_boxes = detect_keyboard_boxes(model, processor, pil_image)
-            keyboard_count = len(keyboard_boxes)
+            # 2단계: 객체 그라운딩 감지
+            obj_boxes = detect_objects(model, processor, pil_image)
+            obj_count = len(obj_boxes)
 
-            if keyboard_boxes:
-                # 원본 프레임에 빨간 박스 그리기
-                annotated = draw_keyboard_boxes(frame_bgr, keyboard_boxes)
-                print(f"[키보드 감지] {keyboard_count}개 감지 — 바운딩 박스 적용")
+            if obj_boxes:
+                annotated = draw_object_boxes(frame_bgr, obj_boxes)
+                print(f"[{DETECTION_LABEL} 감지] {obj_count}개 감지 — 바운딩 박스 적용")
             else:
-                print("[키보드 감지] 키보드 없음")
+                print(f"[{DETECTION_LABEL} 감지] {DETECTION_LABEL} 없음")
 
         except torch.cuda.OutOfMemoryError:
             description = "오류: GPU 메모리가 부족합니다."
         except Exception as e:
-            description = f"분석 오류: {e}"
+            description = f"분석 오류: {type(e).__name__}: {e}"
 
         print(f"\n[분석 결과]\n{description}\n")
 
+        # 공유 상태를 모두 lock 내에서 원자적으로 갱신
         with lock:
-            pending_result = (annotated, description, keyboard_count)
+            state['pending_result']  = (annotated, description, obj_count)
+            state['is_analyzing']    = False
+            state['capture_enabled'] = True
 
-        is_analyzing    = False
-        capture_enabled = True
+    return analysis_worker
 
-    # ── 메인 루프 ─────────────────────────────────────────────────────────────
-    print("\n조작 방법")
-    print("  c  - 현재 프레임 캡처 및 분석 (키보드 감지 포함)")
-    print("  q  - 종료\n")
 
+# ── 메인 루프 ─────────────────────────────────────────────────────────────────
+
+def run_loop(pipeline: rs.pipeline, model, processor) -> None:
+    """실시간 영상 표시 및 사용자 입력 처리 루프."""
+    lock  = threading.Lock()
+    state = {
+        'capture_enabled': True,
+        'is_analyzing':    False,
+        'pending_result':  None,   # (annotated_frame, text, obj_count)
+    }
+    result_image = None
+
+    worker = make_analysis_worker(model, processor, lock, state)
+
+    live_h = RESULT_WIN_WIDTH * CAMERA_HEIGHT // CAMERA_WIDTH
     cv2.namedWindow(LIVE_WIN, cv2.WINDOW_NORMAL)
-    cv2.resizeWindow(LIVE_WIN, 960, 540)
+    cv2.resizeWindow(LIVE_WIN, RESULT_WIN_WIDTH, live_h)
+
+    print("\n조작 방법")
+    print(f"  c  - 현재 프레임 캡처 및 분석 ({DETECTION_LABEL} 감지 포함)")
+    print("  q  - 종료\n")
 
     try:
         while True:
@@ -353,28 +385,26 @@ def main():
             display = frame.copy()
 
             # 상태 오버레이
-            if is_analyzing:
+            with lock:
+                analyzing = state['is_analyzing']
+                enabled   = state['capture_enabled']
+
+            if analyzing:
                 label = "Analyzing...  please wait"
                 fg    = (0, 165, 255)   # 주황
             else:
                 label = "Press 'c' to capture  |  'q' to quit"
                 fg    = (0, 220, 0)     # 초록
 
-            cv2.putText(display, label, (10, 34),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 0), 3)
-            cv2.putText(display, label, (10, 34),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, fg, 2)
-
+            _draw_outlined_text(display, label, (10, 34), STATUS_FONT_SCALE, fg)
             cv2.imshow(LIVE_WIN, display)
 
             # 분석 결과 수신 → 결과창 갱신 (OpenCV 창은 메인 스레드에서만 조작)
             with lock:
-                if pending_result is not None:
-                    annotated_frame, desc, n_keyboards = pending_result
-                    result_image   = build_result_image(
-                        annotated_frame, desc, keyboard_count=n_keyboards
-                    )
-                    pending_result = None
+                if state['pending_result'] is not None:
+                    f_out, desc, n = state['pending_result']
+                    result_image           = build_result_image(f_out, desc, obj_count=n)
+                    state['pending_result'] = None
 
             if result_image is not None:
                 cv2.namedWindow(RESULT_WIN, cv2.WINDOW_NORMAL)
@@ -386,11 +416,12 @@ def main():
             if key == ord('q'):
                 break
 
-            elif key == ord('c') and capture_enabled and not is_analyzing:
-                capture_enabled = False
-                is_analyzing    = True
-                result_image    = None
+            elif key == ord('c') and enabled and not analyzing:
+                with lock:
+                    state['capture_enabled'] = False
+                    state['is_analyzing']    = True
 
+                result_image = None
                 try:
                     cv2.destroyWindow(RESULT_WIN)
                 except cv2.error:
@@ -398,7 +429,7 @@ def main():
 
                 print("캡처됨 - 분석 시작...")
                 threading.Thread(
-                    target=analysis_worker,
+                    target=worker,
                     args=(frame.copy(),),
                     daemon=True,
                 ).start()
@@ -407,6 +438,30 @@ def main():
         pipeline.stop()
         cv2.destroyAllWindows()
         print("종료.")
+
+
+# ── 진입점 ────────────────────────────────────────────────────────────────────
+
+def main():
+    # GPU 확인
+    if not torch.cuda.is_available():
+        print("오류: CUDA GPU를 찾을 수 없습니다.", file=sys.stderr)
+        sys.exit(1)
+
+    gpu_name = torch.cuda.get_device_name(0)
+    gpu_mem  = torch.cuda.get_device_properties(0).total_memory / 1024**3
+    print(f"GPU: {gpu_name} ({gpu_mem:.1f}GB)")
+
+    # 모델 로드
+    try:
+        model, processor = load_model()
+    except Exception as e:
+        print(f"모델 로딩 실패: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    # 카메라 초기화 및 메인 루프 시작
+    pipeline = init_camera()
+    run_loop(pipeline, model, processor)
 
 
 if __name__ == "__main__":
